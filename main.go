@@ -1,39 +1,39 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jessevdk/go-flags"
 )
 
-// Version by Makefile
 var version string
 
 type commandOpts struct {
 	Timeout       time.Duration `long:"timeout" default:"300s" description:"Timeout to wait for connection"`
-	Hostname      string        `short:"H" long:"hostname" description:"Host name using Host headers" required:"true"`
-	IPAddress     string        `short:"I" long:"IP-address" description:"IP address or name" required:"true"`
-	Port          int           `short:"p" long:"port" default:"80" description:"Port number"`
+	Hostname      string        `short:"H" long:"hostname" description:"Host name using Host headers"`
+	IPAddress     string        `short:"I" long:"IP-address" description:"IP address or name"`
+	Port          int           `short:"p" long:"port" description:"Port number"`
 	Method        string        `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
 	URI           string        `short:"u" long:"uri" default:"/" description:"URI to request"`
-	Expect        int           `short:"e" long:"expect" default:"200" description:"Expected HTTP response status"`
+	Expect        string        `short:"e" long:"expect" default:"HTTP/1.,HTTP/2." description:"Comma-delimited list of expected HTTP response status"`
 	UserAgent     string        `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
 	Authorization string        `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
+	SSL           bool          `short:"S" long:"ssl" description:"use https"`
 	SNI           bool          `long:"sni" description:"enable SNI"`
 	TCP4          bool          `short:"4" description:"use tcp4 only"`
+	TCP6          bool          `short:"6" description:"use tcp6 only"`
 	Version       bool          `short:"v" long:"version" description:"Show version"`
 }
-
-type connError struct {
-	e error
-}
-
-func (ce *connError) Error() string { return ce.e.Error() }
 
 func makeTransport() http.RoundTripper {
 	baseDialFunc := (&net.Dialer{
@@ -45,16 +45,28 @@ func makeTransport() http.RoundTripper {
 	if opts.TCP4 {
 		tcpMode = "tcp4"
 	}
-	dialFunc := func(ctx context.Context, network, addr string) (net.Conn, error) {
-		conn, err := baseDialFunc(ctx, tcpMode, addr)
-		if err == nil {
-			return conn, nil
-		}
-		if err != context.Canceled {
-			return nil, &connError{err}
-		}
-		return nil, err
+	if opts.TCP6 {
+		tcpMode = "tcp6"
 	}
+	dialFunc := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		addr := fmt.Sprintf("%s:%d", opts.IPAddress, opts.Port)
+		return baseDialFunc(ctx, tcpMode, addr)
+	}
+
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: true,
+	}
+	if opts.SNI {
+		host, _, err := net.SplitHostPort(opts.Hostname)
+		if err != nil {
+			host = opts.Hostname
+		}
+		tlsConfig = &tls.Config{
+			InsecureSkipVerify: true,
+			ServerName:         host,
+		}
+	}
+
 	return &http.Transport{
 		// inherited http.DefaultTransport
 		Proxy:                 http.ProxyFromEnvironment,
@@ -64,12 +76,60 @@ func makeTransport() http.RoundTripper {
 		ExpectContinueTimeout: 1 * time.Second,
 		// self-customized values
 		ResponseHeaderTimeout: opts.Timeout,
-		TLSClientConfig: &tls.Config{
-			ServerName: host,
-		},
-		ForceAttemptHTTP2: true,
+		TLSClientConfig:       tlsConfig,
+		ForceAttemptHTTP2:     true,
+	}
+}
+
+func buildRequest(ctx context.Context) (*http.Request, error) {
+	schema := "http"
+	if opts.SSL {
+		schema = "https"
 	}
 
+	uri := fmt.Sprintf("%s://%s%s", schema, opts.Hostname, opts.URI)
+	var b bytes.Buffer
+	req, err := http.NewRequestWithContext(
+		ctx,
+		opts.Method,
+		uri,
+		&b,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if opts.Authorization != "" {
+		a := strings.SplitN(opts.Authorization, ":", 2)
+		if len(a) != 2 {
+			return nil, fmt.Errorf("invalid authorization args")
+		}
+		req.SetBasicAuth(a[0], a[1])
+	}
+	req.Header.Set("User-Agent", opts.UserAgent)
+	return req, nil
+}
+
+func expectedStatusCode(status string) string {
+	expects := strings.Split(opts.Expect, ",")
+	for _, e := range expects {
+		if strings.HasPrefix(status, e) {
+			return e
+		}
+	}
+	return ""
+}
+
+type Writer struct {
+	size int
+}
+
+func (w *Writer) Write(p []byte) (int, error) {
+	w.size += len(p)
+	return len(p), nil
+}
+
+func (w *Writer) Size() int {
+	return w.size
 }
 
 func main() {
@@ -78,12 +138,105 @@ func main() {
 
 var opts commandOpts
 
+const UNKNOWN = 3
+const CRITICAL = 2
+const WARNING = 1
+const OK = 0
+
 func _main() int {
 	opts = commandOpts{}
 	psr := flags.NewParser(&opts, flags.Default)
 	_, err := psr.Parse()
 	if err != nil {
-		os.Exit(1)
+		os.Exit(UNKNOWN)
 	}
-	return 1
+
+	if opts.TCP4 && opts.TCP6 {
+		fmt.Printf("Both tcp4 and tcp6 are specified\n")
+		return UNKNOWN
+	}
+
+	if opts.SNI && opts.Hostname == "" {
+		fmt.Printf("hostname is required when use sni\n")
+		return UNKNOWN
+	}
+
+	if opts.Hostname == "" && opts.IPAddress == "" {
+		fmt.Printf("Specify either hostname or ipaddress\n")
+		return UNKNOWN
+	}
+
+	if opts.Hostname == "" {
+		opts.Hostname = opts.IPAddress
+	}
+
+	if opts.IPAddress == "" {
+		host, _, err := net.SplitHostPort(opts.Hostname)
+		if err != nil {
+			opts.IPAddress = opts.Hostname
+		} else {
+			opts.IPAddress = host
+		}
+	}
+
+	if opts.Port == 0 {
+		_, port, err := net.SplitHostPort(opts.Hostname)
+		if err == nil {
+			p, _ := strconv.Atoi(port)
+			// skip error check OK
+			opts.Port = p
+		}
+	}
+
+	if opts.Port == 0 {
+		if opts.SSL {
+			opts.Port = 443
+		} else {
+			opts.Port = 80
+		}
+	}
+
+	if opts.URI == "" {
+		opts.URI = "/"
+	}
+
+	ctx := context.Background()
+	req, err := buildRequest(ctx)
+	if err != nil {
+		fmt.Printf("Error in building request: %v\n", err)
+		return UNKNOWN
+	}
+
+	transport := makeTransport()
+	client := &http.Client{
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	start := time.Now()
+	res, err := client.Do(req)
+	duration := time.Since(start)
+	if err != nil {
+		fmt.Printf("Error in request: %v\n", err)
+		return UNKNOWN
+	}
+
+	defer res.Body.Close()
+	b := &Writer{}
+	io.Copy(b, res.Body)
+
+	statusLine := fmt.Sprintf("%s %s", res.Proto, res.Status)
+	matched := expectedStatusCode(statusLine)
+	if matched == "" {
+		fmt.Printf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s\n", opts.Port, statusLine)
+		return CRITICAL
+	}
+
+	b.Write([]byte(statusLine + "\r\n\r\n"))
+	res.Header.Write(b)
+
+	fmt.Printf(`HTTP OK: Status line output matched "%s"  - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`+"\n", matched, b.Size(), duration.Seconds(), duration.Seconds(), b.Size())
+
+	return OK
 }
