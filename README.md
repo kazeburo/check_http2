@@ -1,8 +1,7 @@
 # check_http2
 
 Nagios check_http plugin alternative.
-
-Currentry not implment full feature, only we need.
+Not implemented full feature, only we need.
 
 ## Usage
 
