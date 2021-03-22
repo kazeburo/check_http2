@@ -35,7 +35,7 @@ type commandOpts struct {
 	Version       bool          `short:"v" long:"version" description:"Show version"`
 }
 
-func makeTransport() http.RoundTripper {
+func makeTransport(opts commandOpts) http.RoundTripper {
 	baseDialFunc := (&net.Dialer{
 		Timeout:   opts.Timeout,
 		KeepAlive: 30 * time.Second,
@@ -81,7 +81,7 @@ func makeTransport() http.RoundTripper {
 	}
 }
 
-func buildRequest(ctx context.Context) (*http.Request, error) {
+func buildRequest(ctx context.Context, opts commandOpts) (*http.Request, error) {
 	schema := "http"
 	if opts.SSL {
 		schema = "https"
@@ -109,7 +109,7 @@ func buildRequest(ctx context.Context) (*http.Request, error) {
 	return req, nil
 }
 
-func expectedStatusCode(status string) string {
+func expectedStatusCode(opts commandOpts, status string) string {
 	expects := strings.Split(opts.Expect, ",")
 	for _, e := range expects {
 		if strings.HasPrefix(status, e) {
@@ -119,16 +119,16 @@ func expectedStatusCode(status string) string {
 	return ""
 }
 
-type Writer struct {
+type NullWriter struct {
 	size int
 }
 
-func (w *Writer) Write(p []byte) (int, error) {
+func (w *NullWriter) Write(p []byte) (int, error) {
 	w.size += len(p)
 	return len(p), nil
 }
 
-func (w *Writer) Size() int {
+func (w *NullWriter) Size() int {
 	return w.size
 }
 
@@ -136,15 +136,13 @@ func main() {
 	os.Exit(_main())
 }
 
-var opts commandOpts
-
 const UNKNOWN = 3
 const CRITICAL = 2
 const WARNING = 1
 const OK = 0
 
 func _main() int {
-	opts = commandOpts{}
+	opts := commandOpts{}
 	psr := flags.NewParser(&opts, flags.Default)
 	_, err := psr.Parse()
 	if err != nil {
@@ -201,13 +199,15 @@ func _main() int {
 	}
 
 	ctx := context.Background()
-	req, err := buildRequest(ctx)
+	ctx, cancel := context.WithTimeout(ctx, opts.Timeout+3*time.Second)
+	defer cancel()
+	req, err := buildRequest(ctx, opts)
 	if err != nil {
 		fmt.Printf("Error in building request: %v\n", err)
 		return UNKNOWN
 	}
 
-	transport := makeTransport()
+	transport := makeTransport(opts)
 	client := &http.Client{
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -223,11 +223,11 @@ func _main() int {
 	}
 
 	defer res.Body.Close()
-	b := &Writer{}
+	b := &NullWriter{}
 	io.Copy(b, res.Body)
 
 	statusLine := fmt.Sprintf("%s %s", res.Proto, res.Status)
-	matched := expectedStatusCode(statusLine)
+	matched := expectedStatusCode(opts, statusLine)
 	if matched == "" {
 		fmt.Printf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s\n", opts.Port, statusLine)
 		return CRITICAL
