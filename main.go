@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -119,6 +120,15 @@ func expectedStatusCode(opts commandOpts, status string) string {
 	return ""
 }
 
+func printVersion() {
+	fmt.Printf(`chocon %s
+Compiler: %s %s
+`,
+		version,
+		runtime.Compiler,
+		runtime.Version())
+}
+
 type NullWriter struct {
 	size int
 }
@@ -147,6 +157,11 @@ func _main() int {
 	_, err := psr.Parse()
 	if err != nil {
 		os.Exit(UNKNOWN)
+	}
+
+	if opts.Version {
+		printVersion()
+		return OK
 	}
 
 	if opts.TCP4 && opts.TCP6 {
