@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/jessevdk/go-flags"
 )
 
@@ -21,12 +22,14 @@ var version string
 
 type commandOpts struct {
 	Timeout       time.Duration `long:"timeout" default:"300s" description:"Timeout to wait for connection"`
+	MaxBufferSize string        `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
 	Hostname      string        `short:"H" long:"hostname" description:"Host name using Host headers"`
 	IPAddress     string        `short:"I" long:"IP-address" description:"IP address or name"`
 	Port          int           `short:"p" long:"port" description:"Port number"`
 	Method        string        `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
 	URI           string        `short:"u" long:"uri" default:"/" description:"URI to request"`
 	Expect        string        `short:"e" long:"expect" default:"HTTP/1.,HTTP/2." description:"Comma-delimited list of expected HTTP response status"`
+	ExpectContent string        `short:"s" long:"string" description:"String to expect in the content"`
 	UserAgent     string        `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
 	Authorization string        `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
 	SSL           bool          `short:"S" long:"ssl" description:"use https"`
@@ -129,17 +132,27 @@ Compiler: %s %s
 		runtime.Version())
 }
 
-type NullWriter struct {
-	size int
+type CapWriter struct {
+	Cap    uint64
+	size   uint64
+	buffer []byte
 }
 
-func (w *NullWriter) Write(p []byte) (int, error) {
-	w.size += len(p)
+func (w *CapWriter) Write(p []byte) (int, error) {
+	w.size += uint64(len(p))
+	if w.size > w.Cap {
+		return 0, fmt.Errorf("Could not write body buffer. size overflowed")
+	}
+	w.buffer = append(w.buffer, p...)
 	return len(p), nil
 }
 
-func (w *NullWriter) Size() int {
+func (w *CapWriter) Size() uint64 {
 	return w.size
+}
+
+func (w *CapWriter) Bytes() []byte {
+	return w.buffer
 }
 
 func main() {
@@ -162,6 +175,12 @@ func _main() int {
 	if opts.Version {
 		printVersion()
 		return OK
+	}
+
+	bufferSize, err := humanize.ParseBytes(opts.MaxBufferSize)
+	if err != nil {
+		fmt.Printf("Could not parse max-buffer-size: %v\n", err)
+		return UNKNOWN
 	}
 
 	if opts.TCP4 && opts.TCP6 {
@@ -238,20 +257,41 @@ func _main() int {
 	}
 
 	defer res.Body.Close()
-	b := &NullWriter{}
-	io.Copy(b, res.Body)
+	b := &CapWriter{
+		Cap: bufferSize,
+	}
+	_, err = io.Copy(b, res.Body)
+	if err != nil {
+		fmt.Printf("Error in read response: %v\n", err)
+		return UNKNOWN
+	}
+
+	var matched []string
 
 	statusLine := fmt.Sprintf("%s %s", res.Proto, res.Status)
-	matched := expectedStatusCode(opts, statusLine)
-	if matched == "" {
-		fmt.Printf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s\n", opts.Port, statusLine)
-		return CRITICAL
+	if opts.Expect != "" {
+		m := expectedStatusCode(opts, statusLine)
+		if m == "" {
+			fmt.Printf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s\n", opts.Port, statusLine)
+			return CRITICAL
+		} else {
+			matched = append(matched, fmt.Sprintf(`Status line output "%s" matched "%s"`, statusLine, m))
+		}
+	}
+
+	if opts.ExpectContent != "" {
+		if !bytes.Contains(b.Bytes(), []byte(opts.ExpectContent)) {
+			fmt.Printf(`HTTP CRITICAL - HTTP response body Not matched "%s" from host on port %d`+"\n", opts.ExpectContent, opts.Port)
+			return CRITICAL
+		} else {
+			matched = append(matched, fmt.Sprintf(`Response body matched "%s"`, opts.ExpectContent))
+		}
 	}
 
 	b.Write([]byte(statusLine + "\r\n\r\n"))
 	res.Header.Write(b)
 
-	fmt.Printf(`HTTP OK: Status line output matched "%s"  - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`+"\n", matched, b.Size(), duration.Seconds(), duration.Seconds(), b.Size())
+	fmt.Printf(`HTTP OK: %s  - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`+"\n", strings.Join(matched, ", "), b.Size(), duration.Seconds(), duration.Seconds(), b.Size())
 
 	return OK
 }
