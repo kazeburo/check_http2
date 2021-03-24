@@ -20,23 +20,29 @@ import (
 
 var version string
 
+const UNKNOWN = 3
+const CRITICAL = 2
+const WARNING = 1
+const OK = 0
+
 type commandOpts struct {
 	Timeout       time.Duration `long:"timeout" default:"300s" description:"Timeout to wait for connection"`
 	MaxBufferSize string        `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
-	Hostname      string        `short:"H" long:"hostname" description:"Host name using Host headers"`
-	IPAddress     string        `short:"I" long:"IP-address" description:"IP address or name"`
-	Port          int           `short:"p" long:"port" description:"Port number"`
-	Method        string        `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
-	URI           string        `short:"u" long:"uri" default:"/" description:"URI to request"`
-	Expect        string        `short:"e" long:"expect" default:"HTTP/1.,HTTP/2." description:"Comma-delimited list of expected HTTP response status"`
-	ExpectContent string        `short:"s" long:"string" description:"String to expect in the content"`
-	UserAgent     string        `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
-	Authorization string        `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
-	SSL           bool          `short:"S" long:"ssl" description:"use https"`
-	SNI           bool          `long:"sni" description:"enable SNI"`
-	TCP4          bool          `short:"4" description:"use tcp4 only"`
-	TCP6          bool          `short:"6" description:"use tcp6 only"`
-	Version       bool          `short:"v" long:"version" description:"Show version"`
+	bufferSize    uint64
+	Hostname      string `short:"H" long:"hostname" description:"Host name using Host headers"`
+	IPAddress     string `short:"I" long:"IP-address" description:"IP address or name"`
+	Port          int    `short:"p" long:"port" description:"Port number"`
+	Method        string `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
+	URI           string `short:"u" long:"uri" default:"/" description:"URI to request"`
+	Expect        string `short:"e" long:"expect" default:"HTTP/1.,HTTP/2." description:"Comma-delimited list of expected HTTP response status"`
+	ExpectContent string `short:"s" long:"string" description:"String to expect in the content"`
+	UserAgent     string `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
+	Authorization string `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
+	SSL           bool   `short:"S" long:"ssl" description:"use https"`
+	SNI           bool   `long:"sni" description:"enable SNI"`
+	TCP4          bool   `short:"4" description:"use tcp4 only"`
+	TCP6          bool   `short:"6" description:"use tcp6 only"`
+	Version       bool   `short:"v" long:"version" description:"Show version"`
 }
 
 func makeTransport(opts commandOpts) http.RoundTripper {
@@ -132,13 +138,13 @@ Compiler: %s %s
 		runtime.Version())
 }
 
-type CapWriter struct {
+type capWriter struct {
 	Cap    uint64
 	size   uint64
 	buffer []byte
 }
 
-func (w *CapWriter) Write(p []byte) (int, error) {
+func (w *capWriter) Write(p []byte) (int, error) {
 	w.size += uint64(len(p))
 	if w.size > w.Cap {
 		return 0, fmt.Errorf("Could not write body buffer. size overflowed")
@@ -147,22 +153,101 @@ func (w *CapWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (w *CapWriter) Size() uint64 {
+func (w *capWriter) Size() uint64 {
 	return w.size
 }
 
-func (w *CapWriter) Bytes() []byte {
+func (w *capWriter) Bytes() []byte {
 	return w.buffer
+}
+
+type reqError struct {
+	msg  string
+	code int
+}
+
+func (e *reqError) Error() string {
+	return e.msg
+}
+
+func (e *reqError) Code() int {
+	return e.code
+}
+
+func request(ctx context.Context, opts commandOpts) (string, *reqError) {
+	req, err := buildRequest(ctx, opts)
+	if err != nil {
+		return "", &reqError{
+			fmt.Sprintf("Error in building request: %v\n", err),
+			UNKNOWN,
+		}
+	}
+
+	transport := makeTransport(opts)
+	client := &http.Client{
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	start := time.Now()
+	res, err := client.Do(req)
+	duration := time.Since(start)
+	if err != nil {
+		return "", &reqError{
+			fmt.Sprintf("Error in request: %v", err),
+			UNKNOWN,
+		}
+	}
+
+	defer res.Body.Close()
+	b := &capWriter{
+		Cap: opts.bufferSize,
+	}
+	_, err = io.Copy(b, res.Body)
+	if err != nil {
+		return "", &reqError{
+			fmt.Sprintf("Error in read response: %v", err),
+			UNKNOWN,
+		}
+	}
+
+	var matched []string
+
+	statusLine := fmt.Sprintf("%s %s", res.Proto, res.Status)
+	if opts.Expect != "" {
+		m := expectedStatusCode(opts, statusLine)
+		if m == "" {
+			return "", &reqError{
+				fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
+				CRITICAL,
+			}
+		} else {
+			matched = append(matched, fmt.Sprintf(`Status line output "%s" matched "%s"`, statusLine, opts.Expect))
+		}
+	}
+
+	if opts.ExpectContent != "" {
+		if !bytes.Contains(b.Bytes(), []byte(opts.ExpectContent)) {
+			return "", &reqError{
+				fmt.Sprintf(`HTTP CRITICAL - HTTP response body Not matched "%s" from host on port %d`, opts.ExpectContent, opts.Port),
+				CRITICAL,
+			}
+		} else {
+			matched = append(matched, fmt.Sprintf(`Response body matched "%s"`, opts.ExpectContent))
+		}
+	}
+
+	b.Write([]byte(statusLine + "\r\n\r\n"))
+	res.Header.Write(b)
+
+	okMsg := fmt.Sprintf(`HTTP OK: %s  - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`, strings.Join(matched, ", "), b.Size(), duration.Seconds(), duration.Seconds(), b.Size())
+	return okMsg, nil
 }
 
 func main() {
 	os.Exit(_main())
 }
-
-const UNKNOWN = 3
-const CRITICAL = 2
-const WARNING = 1
-const OK = 0
 
 func _main() int {
 	opts := commandOpts{}
@@ -182,6 +267,7 @@ func _main() int {
 		fmt.Printf("Could not parse max-buffer-size: %v\n", err)
 		return UNKNOWN
 	}
+	opts.bufferSize = bufferSize
 
 	if opts.TCP4 && opts.TCP6 {
 		fmt.Printf("Both tcp4 and tcp6 are specified\n")
@@ -235,63 +321,13 @@ func _main() int {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, opts.Timeout+3*time.Second)
 	defer cancel()
-	req, err := buildRequest(ctx, opts)
-	if err != nil {
-		fmt.Printf("Error in building request: %v\n", err)
-		return UNKNOWN
+
+	okMsg, reqErr := request(ctx, opts)
+	if reqErr != nil {
+		fmt.Println(reqErr.Error())
+		return reqErr.Code()
 	}
 
-	transport := makeTransport(opts)
-	client := &http.Client{
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	start := time.Now()
-	res, err := client.Do(req)
-	duration := time.Since(start)
-	if err != nil {
-		fmt.Printf("Error in request: %v\n", err)
-		return UNKNOWN
-	}
-
-	defer res.Body.Close()
-	b := &CapWriter{
-		Cap: bufferSize,
-	}
-	_, err = io.Copy(b, res.Body)
-	if err != nil {
-		fmt.Printf("Error in read response: %v\n", err)
-		return UNKNOWN
-	}
-
-	var matched []string
-
-	statusLine := fmt.Sprintf("%s %s", res.Proto, res.Status)
-	if opts.Expect != "" {
-		m := expectedStatusCode(opts, statusLine)
-		if m == "" {
-			fmt.Printf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s\n", opts.Port, statusLine)
-			return CRITICAL
-		} else {
-			matched = append(matched, fmt.Sprintf(`Status line output "%s" matched "%s"`, statusLine, m))
-		}
-	}
-
-	if opts.ExpectContent != "" {
-		if !bytes.Contains(b.Bytes(), []byte(opts.ExpectContent)) {
-			fmt.Printf(`HTTP CRITICAL - HTTP response body Not matched "%s" from host on port %d`+"\n", opts.ExpectContent, opts.Port)
-			return CRITICAL
-		} else {
-			matched = append(matched, fmt.Sprintf(`Response body matched "%s"`, opts.ExpectContent))
-		}
-	}
-
-	b.Write([]byte(statusLine + "\r\n\r\n"))
-	res.Header.Write(b)
-
-	fmt.Printf(`HTTP OK: %s  - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`+"\n", strings.Join(matched, ", "), b.Size(), duration.Seconds(), duration.Seconds(), b.Size())
-
+	fmt.Println(okMsg)
 	return OK
 }
