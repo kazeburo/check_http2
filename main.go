@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -26,23 +27,26 @@ const WARNING = 1
 const OK = 0
 
 type commandOpts struct {
-	Timeout       time.Duration `long:"timeout" default:"300s" description:"Timeout to wait for connection"`
-	MaxBufferSize string        `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
-	bufferSize    uint64
-	Hostname      string `short:"H" long:"hostname" description:"Host name using Host headers"`
-	IPAddress     string `short:"I" long:"IP-address" description:"IP address or name"`
-	Port          int    `short:"p" long:"port" description:"Port number"`
-	Method        string `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
-	URI           string `short:"u" long:"uri" default:"/" description:"URI to request"`
-	Expect        string `short:"e" long:"expect" default:"HTTP/1.,HTTP/2." description:"Comma-delimited list of expected HTTP response status"`
-	ExpectContent string `short:"s" long:"string" description:"String to expect in the content"`
-	UserAgent     string `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
-	Authorization string `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
-	SSL           bool   `short:"S" long:"ssl" description:"use https"`
-	SNI           bool   `long:"sni" description:"enable SNI"`
-	TCP4          bool   `short:"4" description:"use tcp4 only"`
-	TCP6          bool   `short:"6" description:"use tcp6 only"`
-	Version       bool   `short:"v" long:"version" description:"Show version"`
+	Timeout         time.Duration `long:"timeout" default:"10s" description:"Timeout to wait for connection"`
+	MaxBufferSize   string        `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
+	WaitFor         bool          `long:"wait-for" description:"retry until successful when enabled"`
+	WaitForInterval time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
+	WaitForMax      time.Duration `long:"wait-for-max" description:"time to wait for success"`
+	Hostname        string        `short:"H" long:"hostname" description:"Host name using Host headers"`
+	IPAddress       string        `short:"I" long:"IP-address" description:"IP address or name"`
+	Port            int           `short:"p" long:"port" description:"Port number"`
+	Method          string        `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
+	URI             string        `short:"u" long:"uri" default:"/" description:"URI to request"`
+	Expect          string        `short:"e" long:"expect" default:"HTTP/1.,HTTP/2." description:"Comma-delimited list of expected HTTP response status"`
+	ExpectContent   string        `short:"s" long:"string" description:"String to expect in the content"`
+	UserAgent       string        `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
+	Authorization   string        `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
+	SSL             bool          `short:"S" long:"ssl" description:"use https"`
+	SNI             bool          `long:"sni" description:"enable SNI"`
+	TCP4            bool          `short:"4" description:"use tcp4 only"`
+	TCP6            bool          `short:"6" description:"use tcp6 only"`
+	Version         bool          `short:"v" long:"version" description:"Show version"`
+	bufferSize      uint64
 }
 
 func makeTransport(opts commandOpts) http.RoundTripper {
@@ -147,7 +151,7 @@ type capWriter struct {
 func (w *capWriter) Write(p []byte) (int, error) {
 	w.size += uint64(len(p))
 	if w.size > w.Cap {
-		return 0, fmt.Errorf("Could not write body buffer. size overflowed")
+		return 0, fmt.Errorf("Could not write body buffer. buffer is full")
 	}
 	w.buffer = append(w.buffer, p...)
 	return len(p), nil
@@ -178,7 +182,7 @@ func request(ctx context.Context, opts commandOpts) (string, *reqError) {
 	req, err := buildRequest(ctx, opts)
 	if err != nil {
 		return "", &reqError{
-			fmt.Sprintf("Error in building request: %v\n", err),
+			fmt.Sprintf("Error in building request: %v", err),
 			UNKNOWN,
 		}
 	}
@@ -269,6 +273,11 @@ func _main() int {
 	}
 	opts.bufferSize = bufferSize
 
+	if opts.WaitFor && opts.WaitForMax == 0 {
+		fmt.Printf("wait-for-max is required when wait-for is enabled\n")
+		return UNKNOWN
+	}
+
 	if opts.TCP4 && opts.TCP6 {
 		fmt.Printf("Both tcp4 and tcp6 are specified\n")
 		return UNKNOWN
@@ -319,8 +328,29 @@ func _main() int {
 	}
 
 	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, opts.Timeout+3*time.Second)
+	timeout := opts.Timeout + 3*time.Second
+	if opts.WaitForMax > 0 {
+		timeout = opts.WaitForMax
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	if opts.WaitFor {
+		for ctx.Err() == nil {
+			okMsg, reqErr := request(ctx, opts)
+			if reqErr == nil {
+				fmt.Println(okMsg)
+				return OK
+			}
+			log.Printf(reqErr.Error())
+			select {
+			case <-ctx.Done():
+			case <-time.After(opts.WaitForInterval):
+			}
+		}
+		fmt.Printf("Give up waiting for success\n")
+		return UNKNOWN
+	}
 
 	okMsg, reqErr := request(ctx, opts)
 	if reqErr != nil {
