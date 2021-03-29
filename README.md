@@ -12,6 +12,7 @@ Usage:
 Application Options:
       --timeout=           Timeout to wait for connection (default: 10s)
       --max-buffer-size=   Max buffer size to read response body (default: 1MB)
+      --no-discard         raise error when the response body is larger then max-buffer-size
       --wait-for           retry until successful when enabled
       --wait-for-interval= retry interval (default: 2s)
       --wait-for-max=      time to wait for success

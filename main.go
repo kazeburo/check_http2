@@ -29,6 +29,7 @@ const OK = 0
 type commandOpts struct {
 	Timeout         time.Duration `long:"timeout" default:"10s" description:"Timeout to wait for connection"`
 	MaxBufferSize   string        `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
+	NoDiscard       bool          `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
 	WaitFor         bool          `long:"wait-for" description:"retry until successful when enabled"`
 	WaitForInterval time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
 	WaitForMax      time.Duration `long:"wait-for-max" description:"time to wait for success"`
@@ -143,17 +144,27 @@ Compiler: %s %s
 }
 
 type capWriter struct {
-	Cap    uint64
-	size   uint64
-	buffer []byte
+	Cap       uint64
+	NoDiscard bool
+	size      uint64
+	buffer    []byte
 }
 
 func (w *capWriter) Write(p []byte) (int, error) {
 	w.size += uint64(len(p))
-	if w.size > w.Cap {
+	if w.size > w.Cap && w.NoDiscard {
 		return 0, fmt.Errorf("Could not write body buffer. buffer is full")
 	}
-	w.buffer = append(w.buffer, p...)
+
+	if w.size > w.Cap {
+		q := w.Cap - uint64(len(w.buffer))
+		if q >= 0 {
+			w.buffer = append(w.buffer, p[0:q-1]...)
+		}
+	} else {
+		w.buffer = append(w.buffer, p...)
+	}
+
 	return len(p), nil
 }
 
@@ -206,7 +217,8 @@ func request(ctx context.Context, opts commandOpts) (string, *reqError) {
 
 	defer res.Body.Close()
 	b := &capWriter{
-		Cap: opts.bufferSize,
+		Cap:       opts.bufferSize,
+		NoDiscard: opts.NoDiscard,
 	}
 	_, err = io.Copy(b, res.Body)
 	if err != nil {
