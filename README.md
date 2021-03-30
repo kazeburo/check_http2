@@ -6,6 +6,7 @@ Not implemented full feature, only we need.
 ## Usage
 
 ```
+./check_http2 -h
 Usage:
   check_http2 [OPTIONS]
 
@@ -23,6 +24,7 @@ Application Options:
   -u, --uri=               URI to request (default: /)
   -e, --expect=            Comma-delimited list of expected HTTP response status (default: HTTP/1.,HTTP/2.)
   -s, --string=            String to expect in the content
+      --base64-string=     Base64 Encoded string to expect the content
   -A, --useragent=         UserAgent to be sent (default: check_http)
   -a, --authorization=     username:password on sites with basic authentication
   -S, --ssl                use https

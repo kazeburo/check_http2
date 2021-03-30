@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -27,27 +28,29 @@ const WARNING = 1
 const OK = 0
 
 type commandOpts struct {
-	Timeout         time.Duration `long:"timeout" default:"10s" description:"Timeout to wait for connection"`
-	MaxBufferSize   string        `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
-	NoDiscard       bool          `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
-	WaitFor         bool          `long:"wait-for" description:"retry until successful when enabled"`
-	WaitForInterval time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
-	WaitForMax      time.Duration `long:"wait-for-max" description:"time to wait for success"`
-	Hostname        string        `short:"H" long:"hostname" description:"Host name using Host headers"`
-	IPAddress       string        `short:"I" long:"IP-address" description:"IP address or name"`
-	Port            int           `short:"p" long:"port" description:"Port number"`
-	Method          string        `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
-	URI             string        `short:"u" long:"uri" default:"/" description:"URI to request"`
-	Expect          string        `short:"e" long:"expect" default:"HTTP/1.,HTTP/2." description:"Comma-delimited list of expected HTTP response status"`
-	ExpectContent   string        `short:"s" long:"string" description:"String to expect in the content"`
-	UserAgent       string        `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
-	Authorization   string        `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
-	SSL             bool          `short:"S" long:"ssl" description:"use https"`
-	SNI             bool          `long:"sni" description:"enable SNI"`
-	TCP4            bool          `short:"4" description:"use tcp4 only"`
-	TCP6            bool          `short:"6" description:"use tcp6 only"`
-	Version         bool          `short:"v" long:"version" description:"Show version"`
-	bufferSize      uint64
+	Timeout             time.Duration `long:"timeout" default:"10s" description:"Timeout to wait for connection"`
+	MaxBufferSize       string        `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
+	NoDiscard           bool          `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
+	WaitFor             bool          `long:"wait-for" description:"retry until successful when enabled"`
+	WaitForInterval     time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
+	WaitForMax          time.Duration `long:"wait-for-max" description:"time to wait for success"`
+	Hostname            string        `short:"H" long:"hostname" description:"Host name using Host headers"`
+	IPAddress           string        `short:"I" long:"IP-address" description:"IP address or name"`
+	Port                int           `short:"p" long:"port" description:"Port number"`
+	Method              string        `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
+	URI                 string        `short:"u" long:"uri" default:"/" description:"URI to request"`
+	Expect              string        `short:"e" long:"expect" default:"HTTP/1.,HTTP/2." description:"Comma-delimited list of expected HTTP response status"`
+	ExpectContent       string        `short:"s" long:"string" description:"String to expect in the content"`
+	Base64ExpectContent string        `long:"base64-string" description:"Base64 Encoded string to expect the content"`
+	UserAgent           string        `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
+	Authorization       string        `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
+	SSL                 bool          `short:"S" long:"ssl" description:"use https"`
+	SNI                 bool          `long:"sni" description:"enable SNI"`
+	TCP4                bool          `short:"4" description:"use tcp4 only"`
+	TCP6                bool          `short:"6" description:"use tcp6 only"`
+	Version             bool          `short:"v" long:"version" description:"Show version"`
+	bufferSize          uint64
+	expectByte          []byte
 }
 
 func makeTransport(opts commandOpts) http.RoundTripper {
@@ -243,10 +246,10 @@ func request(ctx context.Context, opts commandOpts) (string, *reqError) {
 		}
 	}
 
-	if opts.ExpectContent != "" {
-		if !bytes.Contains(b.Bytes(), []byte(opts.ExpectContent)) {
+	if len(opts.expectByte) > 0 {
+		if !bytes.Contains(b.Bytes(), opts.expectByte) {
 			return "", &reqError{
-				fmt.Sprintf(`HTTP CRITICAL - HTTP response body Not matched "%s" from host on port %d`, opts.ExpectContent, opts.Port),
+				fmt.Sprintf(`HTTP CRITICAL - HTTP response body Not matched "%s" from host on port %d`, string(opts.expectByte), opts.Port),
 				CRITICAL,
 			}
 		} else {
@@ -288,6 +291,23 @@ func _main() int {
 	if opts.WaitFor && opts.WaitForMax == 0 {
 		fmt.Printf("wait-for-max is required when wait-for is enabled\n")
 		return UNKNOWN
+	}
+
+	if opts.ExpectContent != "" && opts.Base64ExpectContent != "" {
+		fmt.Printf("Both string and base64-string are specified\n")
+		return UNKNOWN
+	}
+
+	if opts.ExpectContent != "" {
+		opts.expectByte = []byte(opts.ExpectContent)
+	}
+	if opts.Base64ExpectContent != "" {
+		data, err := base64.StdEncoding.DecodeString(opts.Base64ExpectContent)
+		if err != nil {
+			fmt.Printf("Failed decode base64-string: %v\n", err)
+			return UNKNOWN
+		}
+		opts.expectByte = data
 	}
 
 	if opts.TCP4 && opts.TCP6 {
