@@ -249,11 +249,11 @@ func request(ctx context.Context, opts commandOpts) (string, *reqError) {
 	if len(opts.expectByte) > 0 {
 		if !bytes.Contains(b.Bytes(), opts.expectByte) {
 			return "", &reqError{
-				fmt.Sprintf(`HTTP CRITICAL - HTTP response body Not matched "%s" from host on port %d`, string(opts.expectByte), opts.Port),
+				fmt.Sprintf(`HTTP CRITICAL - HTTP response body Not matched %q from host on port %d`, string(opts.expectByte), opts.Port),
 				CRITICAL,
 			}
 		} else {
-			matched = append(matched, fmt.Sprintf(`Response body matched "%s"`, string(opts.expectByte)))
+			matched = append(matched, fmt.Sprintf(`Response body matched %q`, string(opts.expectByte)))
 		}
 	}
 
