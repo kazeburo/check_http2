@@ -253,7 +253,7 @@ func request(ctx context.Context, opts commandOpts) (string, *reqError) {
 				CRITICAL,
 			}
 		} else {
-			matched = append(matched, fmt.Sprintf(`Response body matched "%s"`, opts.ExpectContent))
+			matched = append(matched, fmt.Sprintf(`Response body matched "%s"`, string(opts.expectByte)))
 		}
 	}
 
