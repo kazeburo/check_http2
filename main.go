@@ -35,7 +35,7 @@ type commandOpts struct {
 	WaitForInterval     time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
 	WaitForMax          time.Duration `long:"wait-for-max" description:"time to wait for success"`
 	Hostname            string        `short:"H" long:"hostname" description:"Host name using Host headers"`
-	IPAddress           string        `short:"I" long:"IP-address" description:"IP address or name"`
+	IPAddress           string        `short:"I" long:"IP-address" description:"IP address or Host name"`
 	Port                int           `short:"p" long:"port" description:"Port number"`
 	Method              string        `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
 	URI                 string        `short:"u" long:"uri" default:"/" description:"URI to request"`
@@ -67,7 +67,7 @@ func makeTransport(opts commandOpts) http.RoundTripper {
 		tcpMode = "tcp6"
 	}
 	dialFunc := func(ctx context.Context, _, _ string) (net.Conn, error) {
-		addr := fmt.Sprintf("%s:%d", opts.IPAddress, opts.Port)
+		addr := net.JoinHostPort(opts.IPAddress, fmt.Sprintf("%d", opts.Port))
 		return baseDialFunc(ctx, tcpMode, addr)
 	}
 
