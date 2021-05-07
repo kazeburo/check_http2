@@ -63,7 +63,7 @@ wait for success
 Give up waiting for success
 ```
 
-wait for consecutive successful
+wait for consecutive successful request
 
 
 ```
