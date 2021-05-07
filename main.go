@@ -32,6 +32,8 @@ type commandOpts struct {
 	MaxBufferSize       string        `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
 	NoDiscard           bool          `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
 	WaitFor             bool          `long:"wait-for" description:"retry until successful when enabled"`
+	WaitForConsecutive  int           `long:"wait-for-consecutive" default:"1" description:"number of consecutive successful requests required"`
+	WaitForInterim      time.Duration `long:"wait-for-interim" default:"1s" description:"interval time after successful request"`
 	WaitForInterval     time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
 	WaitForMax          time.Duration `long:"wait-for-max" description:"time to wait for success"`
 	Hostname            string        `short:"H" long:"hostname" description:"Host name using Host headers"`
@@ -49,6 +51,7 @@ type commandOpts struct {
 	TCP4                bool          `short:"4" description:"use tcp4 only"`
 	TCP6                bool          `short:"6" description:"use tcp6 only"`
 	Version             bool          `short:"v" long:"version" description:"Show version"`
+	Verbose             bool          `long:"verbose" description:"log more"`
 	bufferSize          uint64
 	expectByte          []byte
 }
@@ -207,6 +210,10 @@ func request(ctx context.Context, opts commandOpts) (string, *reqError) {
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
+	}
+	if opts.Verbose {
+		addr := net.JoinHostPort(opts.IPAddress, fmt.Sprintf("%d", opts.Port))
+		log.Printf("%s %s to %s", req.Method, req.URL, addr)
 	}
 	start := time.Now()
 	res, err := client.Do(req)
@@ -368,16 +375,26 @@ func _main() int {
 	defer cancel()
 
 	if opts.WaitFor {
+		consecutive := opts.WaitForConsecutive - 1
 		for ctx.Err() == nil {
 			okMsg, reqErr := request(ctx, opts)
-			if reqErr == nil {
+			interval := opts.WaitForInterim
+			if reqErr == nil && consecutive <= 0 {
 				fmt.Println(okMsg)
 				return OK
+			} else if reqErr == nil {
+				consecutive--
+				if opts.Verbose {
+					log.Println(okMsg)
+				}
+			} else {
+				interval = opts.WaitForInterval
+				consecutive = opts.WaitForConsecutive - 1
+				log.Printf(reqErr.Error())
 			}
-			log.Printf(reqErr.Error())
 			select {
 			case <-ctx.Done():
-			case <-time.After(opts.WaitForInterval):
+			case <-time.After(interval):
 			}
 		}
 		fmt.Printf("Give up waiting for success\n")
