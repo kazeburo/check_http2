@@ -28,9 +28,13 @@ const WARNING = 1
 const OK = 0
 
 type commandOpts struct {
-	Timeout             time.Duration `long:"timeout" default:"10s" description:"Timeout to wait for connection"`
-	MaxBufferSize       string        `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
-	NoDiscard           bool          `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
+	Timeout       time.Duration `long:"timeout" default:"10s" description:"Timeout to wait for connection"`
+	MaxBufferSize string        `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
+	NoDiscard     bool          `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
+
+	Consecutive int           `long:"consecutive" default:"1" description:"number of consecutive successful requests required"`
+	Interim     time.Duration `long:"interim" default:"1s" description:"interval time after successful request for consecutive mode"`
+
 	WaitFor             bool          `long:"wait-for" description:"retry until successful when enabled"`
 	WaitForInterval     time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
 	WaitForMax          time.Duration `long:"wait-for-max" description:"time to wait for success"`
@@ -367,29 +371,55 @@ func _main() int {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	requestNum := 0
 	if opts.WaitFor {
+		consecutive := opts.Consecutive - 1
 		for ctx.Err() == nil {
+			requestNum++
 			okMsg, reqErr := request(ctx, opts)
-			if reqErr == nil {
+			interval := opts.Interim
+			if reqErr == nil && consecutive <= 0 {
+				log.Printf("request[%d]: %s", requestNum, okMsg)
 				fmt.Println(okMsg)
 				return OK
+			} else if reqErr == nil {
+				consecutive--
+				log.Printf("request[%d]: %s", requestNum, okMsg)
+			} else {
+				interval = opts.WaitForInterval
+				consecutive = opts.Consecutive - 1
+				log.Printf("request[%d]: %s", requestNum, reqErr.Error())
 			}
-			log.Printf(reqErr.Error())
 			select {
 			case <-ctx.Done():
-			case <-time.After(opts.WaitForInterval):
+			case <-time.After(interval):
 			}
 		}
 		fmt.Printf("Give up waiting for success\n")
 		return UNKNOWN
 	}
 
-	okMsg, reqErr := request(ctx, opts)
-	if reqErr != nil {
-		fmt.Println(reqErr.Error())
-		return reqErr.Code()
+	consecutive := opts.Consecutive - 1
+	var reqErr *reqError
+	for ctx.Err() == nil {
+		var okMsg string
+		requestNum++
+		okMsg, reqErr = request(ctx, opts)
+		if reqErr == nil && consecutive <= 0 {
+			log.Printf("request[%d]: %s", requestNum, okMsg)
+			fmt.Println(okMsg)
+			return OK
+		} else if reqErr == nil {
+			consecutive--
+			log.Printf("request[%d]: %s", requestNum, okMsg)
+		} else {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(opts.Interim):
+		}
 	}
-
-	fmt.Println(okMsg)
-	return OK
+	fmt.Println(reqErr.Error())
+	return reqErr.Code()
 }

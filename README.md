@@ -14,11 +14,13 @@ Application Options:
       --timeout=           Timeout to wait for connection (default: 10s)
       --max-buffer-size=   Max buffer size to read response body (default: 1MB)
       --no-discard         raise error when the response body is larger then max-buffer-size
+      --consecutive=       number of consecutive successful requests required (default: 1)
+      --interim=           interval time after successful request for consecutive mode (default: 1s)
       --wait-for           retry until successful when enabled
       --wait-for-interval= retry interval (default: 2s)
       --wait-for-max=      time to wait for success
   -H, --hostname=          Host name using Host headers
-  -I, --IP-address=        IP address or name
+  -I, --IP-address=        IP address or Host name
   -p, --port=              Port number
   -j, --method=            Set HTTP Method (default: GET)
   -u, --uri=               URI to request (default: /)
@@ -57,3 +59,4 @@ wait for success
 2021/03/24 15:44:29 HTTP CRITICAL - HTTP response body Not matched "kazeburo-wait-for" from host on port 443
 Give up waiting for success
 ```
+
