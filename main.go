@@ -28,12 +28,14 @@ const WARNING = 1
 const OK = 0
 
 type commandOpts struct {
-	Timeout             time.Duration `long:"timeout" default:"10s" description:"Timeout to wait for connection"`
-	MaxBufferSize       string        `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
-	NoDiscard           bool          `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
+	Timeout       time.Duration `long:"timeout" default:"10s" description:"Timeout to wait for connection"`
+	MaxBufferSize string        `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
+	NoDiscard     bool          `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
+
+	Consecutive int           `long:"consecutive" default:"1" description:"number of consecutive successful requests required"`
+	Interim     time.Duration `long:"interim" default:"1s" description:"interval time after successful request for consecutive mode"`
+
 	WaitFor             bool          `long:"wait-for" description:"retry until successful when enabled"`
-	WaitForConsecutive  int           `long:"wait-for-consecutive" default:"1" description:"number of consecutive successful requests required"`
-	WaitForInterim      time.Duration `long:"wait-for-interim" default:"1s" description:"interval time after successful request"`
 	WaitForInterval     time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
 	WaitForMax          time.Duration `long:"wait-for-max" description:"time to wait for success"`
 	Hostname            string        `short:"H" long:"hostname" description:"Host name using Host headers"`
@@ -51,7 +53,6 @@ type commandOpts struct {
 	TCP4                bool          `short:"4" description:"use tcp4 only"`
 	TCP6                bool          `short:"6" description:"use tcp6 only"`
 	Version             bool          `short:"v" long:"version" description:"Show version"`
-	Verbose             bool          `long:"verbose" description:"log more"`
 	bufferSize          uint64
 	expectByte          []byte
 }
@@ -210,10 +211,6 @@ func request(ctx context.Context, opts commandOpts) (string, *reqError) {
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
-	}
-	if opts.Verbose {
-		addr := net.JoinHostPort(opts.IPAddress, fmt.Sprintf("%d", opts.Port))
-		log.Printf("%s %s to %s", req.Method, req.URL, addr)
 	}
 	start := time.Now()
 	res, err := client.Do(req)
@@ -374,23 +371,24 @@ func _main() int {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	requestNum := 0
 	if opts.WaitFor {
-		consecutive := opts.WaitForConsecutive - 1
+		consecutive := opts.Consecutive - 1
 		for ctx.Err() == nil {
+			requestNum++
 			okMsg, reqErr := request(ctx, opts)
-			interval := opts.WaitForInterim
+			interval := opts.Interim
 			if reqErr == nil && consecutive <= 0 {
+				log.Printf("request[%d]: %s", requestNum, okMsg)
 				fmt.Println(okMsg)
 				return OK
 			} else if reqErr == nil {
 				consecutive--
-				if opts.Verbose {
-					log.Println(okMsg)
-				}
+				log.Printf("request[%d]: %s", requestNum, okMsg)
 			} else {
 				interval = opts.WaitForInterval
-				consecutive = opts.WaitForConsecutive - 1
-				log.Printf(reqErr.Error())
+				consecutive = opts.Consecutive - 1
+				log.Printf("request[%d]: %s", requestNum, reqErr.Error())
 			}
 			select {
 			case <-ctx.Done():
@@ -401,12 +399,27 @@ func _main() int {
 		return UNKNOWN
 	}
 
-	okMsg, reqErr := request(ctx, opts)
-	if reqErr != nil {
-		fmt.Println(reqErr.Error())
-		return reqErr.Code()
+	consecutive := opts.Consecutive - 1
+	var reqErr *reqError
+	for ctx.Err() == nil {
+		var okMsg string
+		requestNum++
+		okMsg, reqErr = request(ctx, opts)
+		if reqErr == nil && consecutive <= 0 {
+			log.Printf("request[%d]: %s", requestNum, okMsg)
+			fmt.Println(okMsg)
+			return OK
+		} else if reqErr == nil {
+			consecutive--
+			log.Printf("request[%d]: %s", requestNum, okMsg)
+		} else {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(opts.Interim):
+		}
 	}
-
-	fmt.Println(okMsg)
-	return OK
+	fmt.Println(reqErr.Error())
+	return reqErr.Code()
 }
