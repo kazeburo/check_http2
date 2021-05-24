@@ -142,9 +142,7 @@ func expectedStatusCode(opts commandOpts, status string) string {
 }
 
 func printVersion() {
-	fmt.Printf(`chocon %s
-Compiler: %s %s
-`,
+	fmt.Printf(`%s Compiler: %s %s`,
 		version,
 		runtime.Compiler,
 		runtime.Version())
