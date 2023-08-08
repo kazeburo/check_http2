@@ -212,7 +212,7 @@ func request(ctx context.Context, opts commandOpts) (string, *reqError) {
 	}
 	start := time.Now()
 	res, err := client.Do(req)
-	duration := time.Since(start)
+
 	if err != nil {
 		return "", &reqError{
 			fmt.Sprintf("Error in request: %v", err),
@@ -225,7 +225,17 @@ func request(ctx context.Context, opts commandOpts) (string, *reqError) {
 		Cap:       opts.bufferSize,
 		NoDiscard: opts.NoDiscard,
 	}
-	_, err = io.Copy(b, res.Body)
+
+	ch := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(b, res.Body)
+		ch <- err
+	}()
+	select {
+	case err = <-ch:
+	case <-time.After(opts.Timeout - time.Since(start)):
+		err = fmt.Errorf("timeout for reading content")
+	}
 	if err != nil {
 		return "", &reqError{
 			fmt.Sprintf("Error in read response: %v", err),
@@ -233,6 +243,7 @@ func request(ctx context.Context, opts commandOpts) (string, *reqError) {
 		}
 	}
 
+	duration := time.Since(start)
 	var matched []string
 
 	statusLine := fmt.Sprintf("%s %s", res.Proto, res.Status)
