@@ -194,7 +194,7 @@ func (e *reqError) Code() int {
 	return e.code
 }
 
-func request(ctx context.Context, opts commandOpts) (string, *reqError) {
+func request(ctx context.Context, client *http.Client, opts commandOpts) (string, *reqError) {
 	req, err := buildRequest(ctx, opts)
 	if err != nil {
 		return "", &reqError{
@@ -203,13 +203,6 @@ func request(ctx context.Context, opts commandOpts) (string, *reqError) {
 		}
 	}
 
-	transport := makeTransport(opts)
-	client := &http.Client{
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
 	start := time.Now()
 	res, err := client.Do(req)
 
@@ -220,22 +213,12 @@ func request(ctx context.Context, opts commandOpts) (string, *reqError) {
 		}
 	}
 
-	defer res.Body.Close()
 	b := &capWriter{
 		Cap:       opts.bufferSize,
 		NoDiscard: opts.NoDiscard,
 	}
-
-	ch := make(chan error, 1)
-	go func() {
-		_, err := io.Copy(b, res.Body)
-		ch <- err
-	}()
-	select {
-	case err = <-ch:
-	case <-time.After(opts.Timeout - time.Since(start)):
-		err = fmt.Errorf("timeout for reading content")
-	}
+	defer res.Body.Close()
+	_, err = io.Copy(b, res.Body)
 	if err != nil {
 		return "", &reqError{
 			fmt.Sprintf("Error in read response: %v", err),
@@ -372,6 +355,15 @@ func _main() int {
 		opts.URI = "/"
 	}
 
+	transport := makeTransport(opts)
+	client := &http.Client{
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Timeout: opts.Timeout,
+	}
+
 	ctx := context.Background()
 	timeout := opts.Timeout + 3*time.Second
 	if opts.WaitForMax > 0 {
@@ -385,7 +377,7 @@ func _main() int {
 		consecutive := opts.Consecutive - 1
 		for ctx.Err() == nil {
 			requestNum++
-			okMsg, reqErr := request(ctx, opts)
+			okMsg, reqErr := request(ctx, client, opts)
 			interval := opts.Interim
 			if reqErr == nil && consecutive <= 0 {
 				log.Printf("request[%d]: %s", requestNum, okMsg)
@@ -413,7 +405,7 @@ func _main() int {
 	for ctx.Err() == nil {
 		var okMsg string
 		requestNum++
-		okMsg, reqErr = request(ctx, opts)
+		okMsg, reqErr = request(ctx, client, opts)
 		if reqErr == nil && consecutive <= 0 {
 			log.Printf("request[%d]: %s", requestNum, okMsg)
 			fmt.Println(okMsg)
