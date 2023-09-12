@@ -50,6 +50,7 @@ type commandOpts struct {
 	Authorization       string        `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
 	SSL                 bool          `short:"S" long:"ssl" description:"use https"`
 	SNI                 bool          `long:"sni" description:"enable SNI"`
+	TLSMaxVersion       string        `long:"tls-max" description:"maximum supported TLS version" choice:"1.0" choice:"1.1" choice:"1.2" choice:"1.3"`
 	TCP4                bool          `short:"4" description:"use tcp4 only"`
 	TCP6                bool          `short:"6" description:"use tcp6 only"`
 	Version             bool          `short:"v" long:"version" description:"Show version"`
@@ -83,9 +84,21 @@ func makeTransport(opts commandOpts) http.RoundTripper {
 		if err != nil {
 			host = opts.Hostname
 		}
-		tlsConfig = &tls.Config{
-			InsecureSkipVerify: true,
-			ServerName:         host,
+		tlsConfig.ServerName = host
+	}
+
+	if opts.TLSMaxVersion != "" {
+		switch opts.TLSMaxVersion {
+		case "1.0":
+			tlsConfig.MinVersion = tls.VersionTLS10
+			tlsConfig.MaxVersion = tls.VersionTLS10
+		case "1.1":
+			tlsConfig.MinVersion = tls.VersionTLS11
+			tlsConfig.MaxVersion = tls.VersionTLS11
+		case "1.2":
+			tlsConfig.MaxVersion = tls.VersionTLS12
+		case "1.3":
+			tlsConfig.MaxVersion = tls.VersionTLS13
 		}
 	}
 
