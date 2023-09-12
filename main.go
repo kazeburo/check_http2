@@ -221,8 +221,8 @@ func request(ctx context.Context, client *http.Client, opts commandOpts) (string
 
 	if err != nil {
 		return "", &reqError{
-			fmt.Sprintf("Error in request: %v", err),
-			UNKNOWN,
+			fmt.Sprintf("HTTP CRITICAL - Error in request: %v", err),
+			CRITICAL,
 		}
 	}
 
@@ -234,8 +234,8 @@ func request(ctx context.Context, client *http.Client, opts commandOpts) (string
 	_, err = io.Copy(b, res.Body)
 	if err != nil {
 		return "", &reqError{
-			fmt.Sprintf("Error in read response: %v", err),
-			UNKNOWN,
+			fmt.Sprintf("HTTP CRITICAL - Error in read response: %v", err),
+			CRITICAL,
 		}
 	}
 
