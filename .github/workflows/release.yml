@@ -2,7 +2,7 @@ name: tagpr
 on:
   push:
     branches:
-      - master
+      - main
 jobs:
   tagpr:
     runs-on: ubuntu-latest
