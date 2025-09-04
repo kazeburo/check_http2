@@ -16,8 +16,3 @@ check:
 
 fmt:
 	go fmt ./...
-
-tag:
-	git tag v${VERSION}
-	git push origin v${VERSION}
-	git push origin main
