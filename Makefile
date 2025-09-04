@@ -1,4 +1,4 @@
-VERSION=0.0.20
+VERSION=0.0.21
 LDFLAGS=-ldflags "-w -s -X main.version=${VERSION} "
 
 all: check_http2
