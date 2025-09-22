@@ -1,5 +1,8 @@
 # Changelog
 
+## [v0.0.22](https://github.com/kazeburo/check_http2/compare/v0.0.21...v0.0.22) - 2025-09-22
+- pin actions commithash by @kazeburo in https://github.com/kazeburo/check_http2/pull/13
+
 ## [v0.0.21](https://github.com/kazeburo/check_http2/compare/v0.0.20...v0.0.21) - 2025-09-04
 - introduced tagpr by @kazeburo in https://github.com/kazeburo/check_http2/pull/11
 
