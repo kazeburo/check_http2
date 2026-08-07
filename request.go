@@ -25,9 +25,13 @@ func (opt *Opt) runWaitFor(ctx context.Context, client *http.Client) (string, in
 			consecutive = opt.Consecutive - 1
 			log.Printf("request[%d]: %s", requestNum, errReq.Error())
 		}
+		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
-		case <-time.After(interval):
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
 		}
 	}
 	return "Give up waiting for success", UNKNOWN

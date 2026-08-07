@@ -192,6 +192,9 @@ func _main() int {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return UNKNOWN
 	}
-
+	if err := opt.verify(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return UNKNOWN
+	}
 	return opt.run()
 }
