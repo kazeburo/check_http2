@@ -25,5 +25,12 @@ jobs:
                   github_action_config.auto_improve: "true"
                   github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "synchronize"]'
                   config.model: "openai/preview/Kimi-K2.7-Code"
-                  config.fallback_models: '["openai/preview/Qwen3.6-35B-A3B","openai/gpt-oss-120b"]'
-                  config.custom_model_max_tokens: 32000
+                  config.fallback_models: '["openai/preview/Qwen3.6-35B-A3B"]'
+                  config.custom_model_max_tokens: 256000
+                  config.max_model_tokens: 120000
+                  config.temperature: "0.2"
+                  pr_code_suggestions.commitable_code_suggestions: "true"
+                  pr_reviewer.num_code_suggestions: "3"
+                  pr_reviewer.enable_review_score: "false"
+                  pr_reviewer.extra_instructions: |
+                      You are a senior software engineer and code reviewer. You will review the code in the pull request and provide feedback on bugs, security, performance, and maintainability. You will not provide feedback on style or formatting. You will be concise in your feedback.
