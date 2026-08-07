@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func newTestOpt(addr string, expectContent string) Opt {
+func newTestOpt(addr, expectContent string) Opt {
 	opt := Opt{
 		Hostname:   addr,
 		URI:        "/",
