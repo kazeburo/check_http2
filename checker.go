@@ -159,8 +159,8 @@ func (opt *Opt) BuildRequest(ctx context.Context) (*http.Request, error) {
 }
 
 func (opt *Opt) ExpectedStatusCode(status string) string {
-	expects := strings.Split(opt.Expect, ",")
-	for _, e := range expects {
+	expects := strings.SplitSeq(opt.Expect, ",")
+	for e := range expects {
 		if strings.HasPrefix(status, e) {
 			return e
 		}
@@ -227,8 +227,8 @@ func (opt *Opt) Request(ctx context.Context, client *http.Client) (string, *Requ
 		}
 	}
 
-	b.Write([]byte(statusLine + "\r\n\r\n"))
-	res.Header.Write(b)
+	_, _ = b.Write([]byte(statusLine + "\r\n\r\n"))
+	_ = res.Header.Write(b)
 
 	okMsg := fmt.Sprintf(`HTTP OK: %s  - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`, strings.Join(matched, ", "), b.Size(), duration.Seconds(), duration.Seconds(), b.Size())
 	return okMsg, nil

@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"time"
@@ -16,75 +16,59 @@ import (
 )
 
 var version string
+var commit string
 
-const UNKNOWN = 3
-const CRITICAL = 2
-const WARNING = 1
-const OK = 0
+const (
+	OK = iota
+	WARNING
+	CRITICAL
+	UNKNOWN
+)
 
-func printVersion() {
-	fmt.Printf(`%s Compiler: %s %s`,
-		version,
-		runtime.Compiler,
-		runtime.Version())
-}
-
-func main() {
-	os.Exit(_main())
-}
-
-func _main() int {
-	opt := Opt{}
-	psr := flags.NewParser(&opt, flags.Default)
-	_, err := psr.Parse()
-	if err != nil {
-		os.Exit(UNKNOWN)
-	}
-
-	if opt.Version {
-		printVersion()
-		return OK
-	}
-
-	opt.bufferSize = uint64(opt.MaxBufferSize)
-
+func (opt *Opt) verifyWaitFor() error {
 	if opt.WaitFor && opt.WaitForMax == 0 {
-		fmt.Printf("wait-for-max is required when wait-for is enabled\n")
-		return UNKNOWN
+		return fmt.Errorf("wait-for-max is required when wait-for is enabled")
 	}
+	return nil
+}
 
+func (opt *Opt) verifyExpectedContent() error {
 	if opt.ExpectContent != "" && opt.Base64ExpectContent != "" {
-		fmt.Printf("Both string and base64-string are specified\n")
-		return UNKNOWN
+		return fmt.Errorf("both string and base64-string are specified")
 	}
 
 	if opt.ExpectContent != "" {
 		opt.expectByte = []byte(opt.ExpectContent)
 	}
+
 	if opt.Base64ExpectContent != "" {
 		data, err := base64.StdEncoding.DecodeString(opt.Base64ExpectContent)
 		if err != nil {
-			fmt.Printf("Failed decode base64-string: %v\n", err)
-			return UNKNOWN
+			return fmt.Errorf("failed decode base64-string: %w", err)
 		}
 		opt.expectByte = data
 	}
 
+	return nil
+}
+
+func (opt *Opt) verifyHostOptions() error {
 	if opt.TCP4 && opt.TCP6 {
-		fmt.Printf("Both tcp4 and tcp6 are specified\n")
-		return UNKNOWN
+		return fmt.Errorf("both tcp4 and tcp6 are specified")
 	}
 
 	if opt.SNI && opt.Hostname == "" {
-		fmt.Printf("hostname is required when use sni\n")
-		return UNKNOWN
+		return fmt.Errorf("hostname is required when using sni")
 	}
 
 	if opt.Hostname == "" && opt.IPAddress == "" {
-		fmt.Printf("Specify either hostname or ipaddress\n")
-		return UNKNOWN
+		return fmt.Errorf("specify either hostname or ipaddress")
 	}
 
+	return nil
+}
+
+func (opt *Opt) normalizeHostAndIP() {
 	if opt.Hostname == "" {
 		opt.Hostname = opt.IPAddress
 	}
@@ -93,11 +77,13 @@ func _main() int {
 		host, _, err := net.SplitHostPort(opt.Hostname)
 		if err != nil {
 			opt.IPAddress = opt.Hostname
-		} else {
-			opt.IPAddress = host
+			return
 		}
+		opt.IPAddress = host
 	}
+}
 
+func (opt *Opt) setDefaultPort() {
 	if opt.Port == 0 {
 		_, port, err := net.SplitHostPort(opt.Hostname)
 		if err == nil {
@@ -114,11 +100,37 @@ func _main() int {
 			opt.Port = 80
 		}
 	}
+}
 
+func (opt *Opt) setDefaultURI() {
 	if opt.URI == "" {
 		opt.URI = "/"
 	}
+}
 
+func (opt *Opt) verify() error {
+	opt.bufferSize = uint64(opt.MaxBufferSize)
+
+	if err := opt.verifyWaitFor(); err != nil {
+		return err
+	}
+
+	if err := opt.verifyExpectedContent(); err != nil {
+		return err
+	}
+
+	if err := opt.verifyHostOptions(); err != nil {
+		return err
+	}
+
+	opt.normalizeHostAndIP()
+	opt.setDefaultPort()
+	opt.setDefaultURI()
+
+	return nil
+}
+
+func (opt *Opt) BuildClient() *http.Client {
 	transport := opt.MakeTransport()
 	client := &http.Client{
 		Transport: transport,
@@ -127,6 +139,11 @@ func _main() int {
 		},
 		Timeout: opt.Timeout,
 	}
+	return client
+}
+
+func (opt *Opt) run() int {
+	client := opt.BuildClient()
 
 	ctx := context.Background()
 	timeout := opt.Timeout + 3*time.Second
@@ -136,59 +153,45 @@ func _main() int {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	requestNum := 0
 	if opt.WaitFor {
-		consecutive := opt.Consecutive - 1
-		for ctx.Err() == nil {
-			requestNum++
-			okMsg, reqErr := opt.Request(ctx, client)
-			interval := opt.Interim
-			if reqErr == nil && consecutive <= 0 {
-				log.Printf("request[%d]: %s", requestNum, okMsg)
-				fmt.Println(okMsg)
-				return OK
-			} else if reqErr == nil {
-				consecutive--
-				log.Printf("request[%d]: %s", requestNum, okMsg)
-			} else {
-				interval = opt.WaitForInterval
-				consecutive = opt.Consecutive - 1
-				log.Printf("request[%d]: %s", requestNum, reqErr.Error())
-			}
-			select {
-			case <-ctx.Done():
-			case <-time.After(interval):
-			}
+		msg, code := opt.runWaitFor(ctx, client)
+		fmt.Println(msg)
+		return code
+	}
+
+	msg, code := opt.runRequest(ctx, client)
+	fmt.Println(msg)
+	return code
+}
+
+func main() {
+	os.Exit(_main())
+}
+
+func _main() int {
+	opt := &Opt{}
+	psr := flags.NewParser(opt, flags.HelpFlag|flags.PassDoubleDash)
+	_, err := psr.Parse()
+	if opt.Version {
+		if commit == "" {
+			commit = "dev"
 		}
-		fmt.Printf("Give up waiting for success\n")
+		fmt.Printf(
+			"%s-%s\n%s/%s, %s, %s\n",
+			filepath.Base(os.Args[0]),
+			version,
+			runtime.GOOS,
+			runtime.GOARCH,
+			runtime.Version(),
+			commit)
+		return OK
+	} else if flags.WroteHelp(err) {
+		fmt.Fprintf(os.Stdout, "%v\n", err)
+		return OK
+	} else if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return UNKNOWN
 	}
 
-	consecutive := opt.Consecutive - 1
-	var rErr *RequestError
-	for ctx.Err() == nil {
-		var okMsg string
-		requestNum++
-		okMsg, rErr = opt.Request(ctx, client)
-		if rErr == nil && consecutive <= 0 {
-			log.Printf("request[%d]: %s", requestNum, okMsg)
-			fmt.Println(okMsg)
-			return OK
-		} else if rErr == nil {
-			consecutive--
-			log.Printf("request[%d]: %s", requestNum, okMsg)
-		} else {
-			break
-		}
-		select {
-		case <-ctx.Done():
-		case <-time.After(opt.Interim):
-		}
-	}
-	if rErr == nil {
-		fmt.Println("HTTP UNKNOWN - timeout")
-		return UNKNOWN
-	}
-	fmt.Println(rErr.Error())
-	return rErr.Code()
+	return opt.run()
 }
