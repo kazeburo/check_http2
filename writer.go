@@ -21,9 +21,7 @@ func (w *CapWriter) Write(p []byte) (int, error) {
 	// Keep only up to Cap bytes; discard the rest.
 	if uint64(len(w.buffer)) < w.Cap {
 		remain := w.Cap - uint64(len(w.buffer))
-		if remain > uint64(len(p)) {
-			remain = uint64(len(p))
-		}
+		remain = min(remain, uint64(len(p)))
 		w.buffer = append(w.buffer, p[:int(remain)]...)
 	}
 

@@ -1,18 +1,19 @@
 VERSION=0.0.24
-LDFLAGS=-ldflags "-w -s -X main.version=${VERSION} "
+GITCOMMIT?=$(shell git describe --dirty --always)
+LDFLAGS=-ldflags "-w -s -X main.version=${VERSION} -X main.commit=${GITCOMMIT}"
 
 all: check_http2
 
-.PHONY: check_http2
+.PHONY: check_http2 linux check lint
 
-check_http2: writer.go checker.go main.go
-	go build $(LDFLAGS) -o check_http2 writer.go checker.go main.go
+check_http2: *.go
+	go build $(LDFLAGS) -o check_http2
 
-linux: writer.go checker.go main.go
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o check_http2 writer.go checker.go main.go
+linux: *.go
+	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o check_http2
 
 check:
 	go test -v ./...
 
-fmt:
-	go fmt ./...
+lint:
+	golangci-lint run ./...
