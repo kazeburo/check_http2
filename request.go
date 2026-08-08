@@ -54,9 +54,13 @@ func (opt *Opt) runRequest(ctx context.Context, client *http.Client) (string, in
 		} else {
 			break
 		}
+		timer := time.NewTimer(opt.Interim)
 		select {
 		case <-ctx.Done():
-		case <-time.After(opt.Interim):
+		    if !timer.Stop() {
+		        <-timer.C
+		    }
+		case <-timer.C:
 		}
 	}
 	if rErr == nil {
