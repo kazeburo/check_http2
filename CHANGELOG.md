@@ -1,5 +1,13 @@
 # Changelog
 
+## [v0.0.25](https://github.com/monitoring-forge/check_http2/compare/v0.0.24...v0.0.25) - 2026-08-08
+
+- Sync files with `monitoring-forge/github-common` by @monitoring-forge-files-sync-action[bot] in https://github.com/monitoring-forge/check_http2/pull/22
+- Sync files with `monitoring-forge/github-common` by @monitoring-forge-files-sync-action[bot] in https://github.com/monitoring-forge/check_http2/pull/24
+- ci: bump the dependencies group with 3 updates by @dependabot[bot] in https://github.com/monitoring-forge/check_http2/pull/21
+- refactor main and improve tests by @kazeburo in https://github.com/monitoring-forge/check_http2/pull/25
+- ci: bump the-pr-agent/pr-agent from 0.41.0 to 0.41.1 in the dependencies group by @dependabot[bot] in https://github.com/monitoring-forge/check_http2/pull/26
+
 ## [v0.0.24](https://github.com/monitoring-forge/check_http2/compare/v0.0.23...v0.0.24) - 2026-07-16
 
 - repo transfer and add verify opt by @kazeburo in https://github.com/monitoring-forge/check_http2/pull/19
